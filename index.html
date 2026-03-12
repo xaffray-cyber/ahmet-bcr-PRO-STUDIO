@@ -1483,17 +1483,39 @@ async function runAnalysis() {
     if (!rawText||rawText.trim()==='') throw new Error('Gemini boş yanıt döndürdü. Tekrar dene.');
 
     const parseJSON = (text) => {
+      // Layer 1: direct
       try { return JSON.parse(text.trim()); } catch(e) {}
-      let t = text.replace(/```json\s*/gi,'').replace(/```\s*/g,'').trim();
+      // Layer 2: strip ALL markdown fences aggressively
+      let t = text
+        .replace(/^[\s\S]*?```(?:json)?[\s\r\n]*/i, '')  // strip everything before/including ```json
+        .replace(/```[\s\S]*$/i, '')                       // strip ``` and everything after
+        .trim();
       try { return JSON.parse(t); } catch(e) {}
+      // Layer 3: find first { to last }
       const s = t.indexOf('{'), en = t.lastIndexOf('}');
       if (s !== -1 && en !== -1 && en > s) {
         try { return JSON.parse(t.slice(s, en+1)); } catch(e) {}
       }
+      // Layer 4: find first { and auto-close unclosed braces/brackets
       if (s !== -1) {
-        let chunk = t.slice(s), open = 0;
-        for (const ch of chunk) { if(ch==='{') open++; else if(ch==='}') open--; }
-        if (open > 0) chunk += '}'.repeat(open);
+        let chunk = t.slice(s);
+        // Remove trailing incomplete string/key
+        chunk = chunk.replace(/,?\s*"[^"]*$/, '');
+        chunk = chunk.replace(/,?\s*"[^"]*":\s*"[^"]*$/, '');
+        // Count and close
+        let braces = 0, brackets = 0, inStr = false, esc = false;
+        for (const ch of chunk) {
+          if (esc) { esc=false; continue; }
+          if (ch==='\\' && inStr) { esc=true; continue; }
+          if (ch==='"') { inStr=!inStr; continue; }
+          if (inStr) continue;
+          if (ch==='{') braces++;
+          else if (ch==='}') braces--;
+          else if (ch==='[') brackets++;
+          else if (ch===']') brackets--;
+        }
+        if (brackets > 0) chunk += ']'.repeat(brackets);
+        if (braces > 0) chunk += '}'.repeat(braces);
         try { return JSON.parse(chunk); } catch(e) {}
       }
       return null;
